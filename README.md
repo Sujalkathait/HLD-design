@@ -6,9 +6,9 @@ A curated collection of scalable, production-ready High-Level System Designs (HL
 
 ## System Design Catalog
 
-| System | Preview | Documentation | Diagram Source |
+| System | Target Scale | Documentation | Architecture Diagram |
 | :--- | :--- | :--- | :--- |
-| **E-Commerce Microservices Platform** (Amazon / Flipkart scale) | [![](images/ecommerce-architecture.jpg)](designs/ecommerce/) | [Documentation & Spec](designs/ecommerce/README.md) | [`ecommerce-hld.mmd`](designs/ecommerce/ecommerce-hld.mmd) |
+| **E-Commerce Microservices Platform** | 1M Daily Active Users (Amazon / Flipkart scale) | [Architecture Spec & Design](designs/ecommerce/README.md) | [`ecommerce-hld.mmd`](designs/ecommerce/ecommerce-hld.mmd) |
 
 ---
 
@@ -17,8 +17,8 @@ A curated collection of scalable, production-ready High-Level System Designs (HL
 ```text
 HLD-design/
 ├── README.md                      # Main catalog and index of all system designs
-├── images/                        # Exported architecture images & diagrams
-│   └── ecommerce-architecture.jpg
+├── images/                        # Generated high-resolution architecture diagrams (SVG)
+│   └── ecommerce-hld.svg
 └── designs/                       # Modular directory for each individual system design
     └── ecommerce/                 # E-Commerce Microservices HLD
         ├── README.md              # Detailed specifications, requirements & capacity

@@ -6,7 +6,7 @@ Comprehensive microservices architecture for an e-commerce platform (like Amazon
 
 ## Architecture Diagram
 
-![E-Commerce Architecture Diagram](../../images/ecommerce-architecture.jpg)
+![E-Commerce Architecture Diagram](../../images/ecommerce-hld.svg)
 
 > **Source File**: [`ecommerce-hld.mmd`](./ecommerce-hld.mmd)
 
