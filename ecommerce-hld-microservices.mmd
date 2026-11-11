@@ -1,14 +1,7 @@
 flowchart LR
 
-    %% ===================== LEGEND =====================
-    subgraph LEGEND["Legend"]
-        direction TB
-        L1["Solid Line = User is Waiting"]
-        L2["Dotted Line = Happens in Background"]
-    end
-
     %% ===================== CLIENT TO GATEWAY =====================
-    CLIENT["Client<br/>Website · Mobile App"] --> DNS["DNS"] --> CDN["CDN<br/>CloudFront"] --> WAF["Firewall"] --> LB["Load Balancer"]
+    CLIENT["Client<br/>Website · Mobile App"] --> DNS["DNS"] --> CDN["Cloudflare<br/>CDN + Firewall"] --> LB["Load Balancer"]
     CDN --> S3[("S3<br/>Images")]
 
     GW["API Gateway<br/>Token Check<br/>Rate Limiting<br/>Routing"]
