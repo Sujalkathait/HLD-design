@@ -3,31 +3,22 @@ flowchart LR
     %% ===================== LEGEND =====================
     subgraph LEGEND["Legend"]
         direction TB
-        L1["Solid Line = Synchronous · User Waiting"]
-        L2["Dotted Line = Asynchronous · Via Kafka"]
+        L1["Solid Line = User is Waiting"]
+        L2["Dotted Line = Happens in Background"]
     end
 
-    %% ===================== EDGE LAYER =====================
-    subgraph EDGE["Edge Layer"]
-        direction TB
-        CLIENT["Client<br/>Website · Mobile App · Admin Panel"]
-        DNS["DNS"]
-        CDN["Content Delivery Network<br/>CloudFront"]
-        S3[("S3 Storage<br/>Images · Static Files")]
-        WAF["Web Application Firewall"]
-        LB["Load Balancer"]
-        CLIENT --> DNS --> CDN --> WAF --> LB
-        CDN --> S3
-    end
+    %% ===================== CLIENT TO GATEWAY =====================
+    CLIENT["Client<br/>Website · Mobile App"] --> DNS["DNS"] --> CDN["CDN<br/>CloudFront"] --> WAF["Firewall"] --> LB["Load Balancer"]
+    CDN --> S3[("S3<br/>Images")]
 
-    GW["API Gateway<br/>Token Validation<br/>Rate Limiting<br/>Request Routing"]
+    GW["API Gateway<br/>Token Check<br/>Rate Limiting<br/>Routing"]
     LB --> GW
 
     %% ===================== USER SERVICE =====================
     subgraph USER_BLOCK["User Service"]
         direction TB
         USER_S["User Service"]
-        USER_REDIS[("Redis<br/>Session · Token")]
+        USER_REDIS[("Redis<br/>Cache")]
         USER_PG[("PostgreSQL<br/>Primary")]
         USER_PG_R[("PostgreSQL<br/>Replica")]
         USER_S --> USER_REDIS
@@ -39,7 +30,7 @@ flowchart LR
     subgraph PRODUCT_BLOCK["Product Service"]
         direction TB
         PRODUCT_S["Product Service"]
-        PRODUCT_REDIS[("Redis<br/>Catalog Cache")]
+        PRODUCT_REDIS[("Redis<br/>Cache")]
         PRODUCT_MONGO[("MongoDB<br/>Primary")]
         PRODUCT_MONGO_R[("MongoDB<br/>Replica")]
         PRODUCT_S --> PRODUCT_REDIS
@@ -51,7 +42,7 @@ flowchart LR
     subgraph SEARCH_BLOCK["Search Service"]
         direction TB
         SEARCH_S["Search Service"]
-        SEARCH_REDIS[("Redis<br/>Query Cache")]
+        SEARCH_REDIS[("Redis<br/>Cache")]
         SEARCH_ES[("Elasticsearch<br/>Primary")]
         SEARCH_ES_R[("Elasticsearch<br/>Replica")]
         SEARCH_S --> SEARCH_REDIS
@@ -63,7 +54,7 @@ flowchart LR
     subgraph RECO_BLOCK["Recommendation Service"]
         direction TB
         RECO_S["Recommendation Service"]
-        RECO_REDIS[("Redis<br/>Top-N Cache")]
+        RECO_REDIS[("Redis<br/>Cache")]
         RECO_CASS[("Cassandra<br/>Node")]
         RECO_CASS_R[("Cassandra<br/>Replica")]
         RECO_S --> RECO_REDIS
@@ -75,7 +66,7 @@ flowchart LR
     subgraph CART_BLOCK["Cart Service"]
         direction TB
         CART_S["Cart Service"]
-        CART_REDIS[("Redis<br/>Active Carts")]
+        CART_REDIS[("Redis<br/>Cache")]
         CART_MONGO[("MongoDB<br/>Primary")]
         CART_MONGO_R[("MongoDB<br/>Replica")]
         CART_S --> CART_REDIS
@@ -103,25 +94,22 @@ flowchart LR
         PAYMENT_PG -. replication .-> PAYMENT_PG_R
     end
 
-    PAYMENT_PROVIDER["Payment Provider<br/>Razorpay · Stripe<br/>External"]
-    PAYMENT_S --> PAYMENT_PROVIDER
-
     %% ===================== KAFKA =====================
-    subgraph KAFKA_BLOCK["Apache Kafka · Message Queue"]
+    subgraph KAFKA_BLOCK["Kafka · Message Queue"]
         direction TB
-        KAFKA[("Kafka · 3 Brokers<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications")]
-        RETRY["Retry Queue<br/>Waits Longer Each Retry"]
+        KAFKA[("Kafka · 3 Servers<br/>Topics: orders · payments<br/>catalog · inventory<br/>shipments · notifications")]
+        RETRY["Retry Queue"]
         DLQ[("Dead Letter Queue<br/>Failed Messages")]
-        KAFKA -. "message failed" .-> RETRY
+        KAFKA -. "failed" .-> RETRY
         RETRY -. "retry" .-> KAFKA
-        RETRY -. "all retries failed" .-> DLQ
+        RETRY -. "gave up" .-> DLQ
     end
 
     %% ===================== INVENTORY SERVICE =====================
     subgraph INVENTORY_BLOCK["Inventory Service"]
         direction TB
         INVENTORY_S["Inventory Service"]
-        INVENTORY_REDIS[("Redis<br/>Stock Cache")]
+        INVENTORY_REDIS[("Redis<br/>Cache")]
         INVENTORY_PG[("PostgreSQL<br/>Primary")]
         INVENTORY_PG_R[("PostgreSQL<br/>Replica")]
         INVENTORY_S --> INVENTORY_REDIS
@@ -139,9 +127,6 @@ flowchart LR
         SHIPPING_PG -. replication .-> SHIPPING_PG_R
     end
 
-    COURIER["Courier · Logistics API<br/>External"]
-    SHIPPING_S --> COURIER
-
     %% ===================== NOTIFICATION SERVICE =====================
     subgraph NOTIFICATION_BLOCK["Notification Service"]
         direction TB
@@ -152,10 +137,7 @@ flowchart LR
         NOTIFICATION_CASS -. replication .-> NOTIFICATION_CASS_R
     end
 
-    EMAIL_SMS["Email · SMS<br/>External"]
-    NOTIFICATION_S --> EMAIL_SMS
-
-    %% ===================== SYNCHRONOUS FLOWS =====================
+    %% ===================== GATEWAY TO SERVICES =====================
     GW --> USER_S
     GW --> PRODUCT_S
     GW --> SEARCH_S
@@ -165,14 +147,14 @@ flowchart LR
     CART_S --> ORDER_S
     ORDER_S --> PAYMENT_S
 
-    %% ===================== ASYNC PRODUCERS =====================
+    %% ===================== SERVICES TO KAFKA =====================
     PRODUCT_S -. "catalog" .-> KAFKA
     ORDER_S -. "orders" .-> KAFKA
     PAYMENT_S -. "payments" .-> KAFKA
     INVENTORY_S -. "inventory" .-> KAFKA
     SHIPPING_S -. "shipments" .-> KAFKA
 
-    %% ===================== ASYNC CONSUMERS =====================
+    %% ===================== KAFKA TO SERVICES =====================
     KAFKA -. "catalog" .-> SEARCH_S
     KAFKA -. "orders · catalog" .-> RECO_S
     KAFKA -. "orders" .-> INVENTORY_S
@@ -187,7 +169,6 @@ flowchart LR
     classDef redis fill:#7f1d1d,stroke:#f87171,color:#fee2e2
     classDef cass fill:#164e63,stroke:#22d3ee,color:#cffafe
     classDef elastic fill:#365314,stroke:#a3e635,color:#ecfccb
-    classDef ext fill:#422006,stroke:#fb923c,color:#ffedd5,stroke-dasharray:5 5
     classDef kafkaNode fill:#4c0519,stroke:#fb7185,color:#ffe4e6,stroke-width:3px
     classDef dlqNode fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
     classDef edgeNode fill:#27272a,stroke:#a1a1aa,color:#f4f4f5
@@ -199,7 +180,6 @@ flowchart LR
     class USER_REDIS,PRODUCT_REDIS,SEARCH_REDIS,RECO_REDIS,CART_REDIS,INVENTORY_REDIS redis
     class RECO_CASS,RECO_CASS_R,NOTIFICATION_CASS,NOTIFICATION_CASS_R cass
     class SEARCH_ES,SEARCH_ES_R elastic
-    class PAYMENT_PROVIDER,COURIER,EMAIL_SMS ext
     class KAFKA kafkaNode
     class DLQ,RETRY dlqNode
     class CLIENT,DNS,CDN,S3,WAF,LB edgeNode
