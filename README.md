@@ -39,7 +39,7 @@ flowchart LR
         CDN --> S3
     end
 
-    GW["API Gateway<br/>JWT Validation<br/>Rate Limiting<br/>Request Routing"]
+    GW["API Gateway<br/>Token Validation<br/>Rate Limiting<br/>Request Routing"]
     LB --> GW
 
     %% ===================== USER SERVICE =====================
@@ -103,10 +103,10 @@ flowchart LR
     end
 
     %% ===================== ORDER SERVICE =====================
-    subgraph ORDER_BLOCK["Order Service · Saga Orchestrator"]
+    subgraph ORDER_BLOCK["Order Service"]
         direction TB
         ORDER_S["Order Service"]
-        ORDER_PG[("PostgreSQL Primary<br/>Orders + Outbox Table")]
+        ORDER_PG[("PostgreSQL<br/>Primary")]
         ORDER_PG_R[("PostgreSQL<br/>Replica")]
         ORDER_S --> ORDER_PG
         ORDER_PG -. replication .-> ORDER_PG_R
@@ -115,8 +115,8 @@ flowchart LR
     %% ===================== PAYMENT SERVICE =====================
     subgraph PAYMENT_BLOCK["Payment Service"]
         direction TB
-        PAYMENT_S["Payment Service<br/>Idempotency Keys"]
-        PAYMENT_PG[("PostgreSQL Primary<br/>Payments + Outbox Table")]
+        PAYMENT_S["Payment Service"]
+        PAYMENT_PG[("PostgreSQL<br/>Primary")]
         PAYMENT_PG_R[("PostgreSQL<br/>Replica")]
         PAYMENT_S --> PAYMENT_PG
         PAYMENT_PG -. replication .-> PAYMENT_PG_R
@@ -125,15 +125,15 @@ flowchart LR
     PAYMENT_PROVIDER["Payment Provider<br/>Razorpay · Stripe<br/>External"]
     PAYMENT_S --> PAYMENT_PROVIDER
 
-    %% ===================== KAFKA EVENT BACKBONE =====================
-    subgraph KAFKA_BLOCK["Apache Kafka · Event Backbone"]
+    %% ===================== KAFKA =====================
+    subgraph KAFKA_BLOCK["Apache Kafka · Message Queue"]
         direction TB
-        KAFKA[("Kafka · Replicated x 3<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications<br/>Consumer Group Per Service<br/>Partition By Entity ID")]
-        RETRY["Retry Queue<br/>Exponential Backoff"]
+        KAFKA[("Kafka · 3 Brokers<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications")]
+        RETRY["Retry Queue<br/>Waits Longer Each Retry"]
         DLQ[("Dead Letter Queue<br/>Failed Messages")]
         KAFKA -. "message failed" .-> RETRY
         RETRY -. "retry" .-> KAFKA
-        RETRY -. "all retries exhausted" .-> DLQ
+        RETRY -. "all retries failed" .-> DLQ
     end
 
     %% ===================== INVENTORY SERVICE =====================
@@ -184,7 +184,7 @@ flowchart LR
     CART_S --> ORDER_S
     ORDER_S --> PAYMENT_S
 
-    %% ===================== ASYNC PRODUCERS · OUTBOX RELAY =====================
+    %% ===================== ASYNC PRODUCERS =====================
     PRODUCT_S -. "catalog" .-> KAFKA
     ORDER_S -. "orders" .-> KAFKA
     PAYMENT_S -. "payments" .-> KAFKA
@@ -232,15 +232,15 @@ flowchart LR
 | Service | What It Does | Database | Why This Database |
 | --- | --- | --- | --- |
 | **User Service** | Sign up, login, manage profiles, sessions | PostgreSQL + Redis | Reliable user data + fast session lookups |
-| **Product Service** | Product catalog — names, prices, images, variants | MongoDB + Redis | Flexible schemas for different product categories + hot product cache |
+| **Product Service** | Product catalog — names, prices, images, variants | MongoDB + Redis | Flexible product schemas + hot product cache |
 | **Search Service** | Full-text product search, filters, autocomplete | Elasticsearch + Redis | Built for fast text search + frequent query cache |
-| **Recommendation Service** | "You might also like" based on browsing and purchases | Cassandra + Redis | Handles massive click-tracking writes + top-N cache |
+| **Recommendation Service** | "You might also like" suggestions | Cassandra + Redis | Handles massive click-tracking writes + top-N cache |
 | **Cart Service** | Add to cart, update quantities, persist across devices | MongoDB + Redis | Flexible cart structure + active cart quick access |
-| **Order Service** | Create orders, track status, orchestrate entire flow via Saga Pattern | PostgreSQL | Strong ACID — orders must never be inconsistent |
-| **Payment Service** | Process payments, refunds, prevents duplicate charges via idempotency keys | PostgreSQL | Money transactions need strong consistency |
+| **Order Service** | Create orders, track status, coordinate the order flow | PostgreSQL | Orders must never be inconsistent |
+| **Payment Service** | Process payments, handle refunds | PostgreSQL | Money transactions need strong consistency |
 | **Inventory Service** | Track stock, reserve on order, release on cancellation | PostgreSQL + Redis | Accurate counts + real-time stock display |
 | **Shipping Service** | Create shipments, generate tracking, update delivery status | PostgreSQL | Reliable shipment records |
-| **Notification Service** | Order confirmations, receipts, shipping updates via email and SMS | Cassandra | High-volume write-heavy notification logs |
+| **Notification Service** | Send order confirmations, receipts, shipping updates | Cassandra | High-volume notification logs |
 
 ---
 
@@ -265,33 +265,31 @@ When the Order Service creates a new order, it doesn't call the Inventory Servic
 When a message fails, it doesn't disappear:
 
 1. **First attempt fails** → goes to the Retry Queue
-2. **Retry Queue** waits (1s → 5s → 30s, exponential backoff) and sends it back
-3. **After 3 retries fail** → moves to Dead Letter Queue
-4. **Dead Letter Queue** stores it permanently — engineers review, fix the bug, replay manually
+2. **Retry Queue** waits longer each time and sends it back
+3. **After all retries fail** → moves to Dead Letter Queue
+4. **Dead Letter Queue** stores it permanently for engineers to review and fix
 
 **No message is ever lost.**
 
 ---
 
-## Saga Pattern — How an Order Is Placed
+## How an Order Is Placed (Step by Step)
 
-The Order Service orchestrates multi-service transactions:
-
-| Step | Action | If It Fails |
+| Step | What Happens | If It Fails |
 | --- | --- | --- |
-| 1 | Create order in database | — |
-| 2 | Reserve inventory (via Kafka) | Cancel order |
-| 3 | Process payment (sync call) | Release inventory |
-| 4 | Create shipment (via Kafka) | Refund payment + release inventory |
-| 5 | Send notification (via Kafka) | Log failure, retry later |
+| 1 | User clicks "Place Order" → Order Service creates order | — |
+| 2 | Kafka tells Inventory Service → stock reserved | Cancel order |
+| 3 | Order Service calls Payment Service → payment charged | Release stock |
+| 4 | Kafka tells Shipping Service → shipment created | Refund payment + release stock |
+| 5 | Kafka tells Notification Service → email and SMS sent | Log failure, retry later |
 
-Each step has a **compensating action** — if step 3 fails, step 2 is undone automatically.
+If any step fails, all previous steps are undone automatically.
 
 ---
 
-## Color Legend for Diagram
+## Color Guide
 
-| Color | Meaning |
+| Color | What It Represents |
 | --- | --- |
 | 🟣 Purple | Microservices |
 | 🔵 Blue | PostgreSQL databases |
@@ -299,6 +297,6 @@ Each step has a **compensating action** — if step 3 fails, step 2 is undone au
 | 🔴 Red | Redis caches |
 | 🩵 Cyan | Cassandra databases |
 | 🟡 Yellow-Green | Elasticsearch |
-| 🟠 Orange (dashed) | External services |
+| 🟠 Orange (dashed border) | External services |
 | 🩷 Pink | Apache Kafka |
-| ⬜ Gray | Edge layer (Client, DNS, CDN, WAF, Load Balancer) |
+| ⬜ Gray | Edge layer |

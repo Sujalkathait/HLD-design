@@ -20,7 +20,7 @@ flowchart LR
         CDN --> S3
     end
 
-    GW["API Gateway<br/>JWT Validation<br/>Rate Limiting<br/>Request Routing"]
+    GW["API Gateway<br/>Token Validation<br/>Rate Limiting<br/>Request Routing"]
     LB --> GW
 
     %% ===================== USER SERVICE =====================
@@ -84,10 +84,10 @@ flowchart LR
     end
 
     %% ===================== ORDER SERVICE =====================
-    subgraph ORDER_BLOCK["Order Service · Saga Orchestrator"]
+    subgraph ORDER_BLOCK["Order Service"]
         direction TB
         ORDER_S["Order Service"]
-        ORDER_PG[("PostgreSQL Primary<br/>Orders + Outbox Table")]
+        ORDER_PG[("PostgreSQL<br/>Primary")]
         ORDER_PG_R[("PostgreSQL<br/>Replica")]
         ORDER_S --> ORDER_PG
         ORDER_PG -. replication .-> ORDER_PG_R
@@ -96,8 +96,8 @@ flowchart LR
     %% ===================== PAYMENT SERVICE =====================
     subgraph PAYMENT_BLOCK["Payment Service"]
         direction TB
-        PAYMENT_S["Payment Service<br/>Idempotency Keys"]
-        PAYMENT_PG[("PostgreSQL Primary<br/>Payments + Outbox Table")]
+        PAYMENT_S["Payment Service"]
+        PAYMENT_PG[("PostgreSQL<br/>Primary")]
         PAYMENT_PG_R[("PostgreSQL<br/>Replica")]
         PAYMENT_S --> PAYMENT_PG
         PAYMENT_PG -. replication .-> PAYMENT_PG_R
@@ -106,15 +106,15 @@ flowchart LR
     PAYMENT_PROVIDER["Payment Provider<br/>Razorpay · Stripe<br/>External"]
     PAYMENT_S --> PAYMENT_PROVIDER
 
-    %% ===================== KAFKA EVENT BACKBONE =====================
-    subgraph KAFKA_BLOCK["Apache Kafka · Event Backbone"]
+    %% ===================== KAFKA =====================
+    subgraph KAFKA_BLOCK["Apache Kafka · Message Queue"]
         direction TB
-        KAFKA[("Kafka · Replicated x 3<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications<br/>Consumer Group Per Service<br/>Partition By Entity ID")]
-        RETRY["Retry Queue<br/>Exponential Backoff"]
+        KAFKA[("Kafka · 3 Brokers<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications")]
+        RETRY["Retry Queue<br/>Waits Longer Each Retry"]
         DLQ[("Dead Letter Queue<br/>Failed Messages")]
         KAFKA -. "message failed" .-> RETRY
         RETRY -. "retry" .-> KAFKA
-        RETRY -. "all retries exhausted" .-> DLQ
+        RETRY -. "all retries failed" .-> DLQ
     end
 
     %% ===================== INVENTORY SERVICE =====================
@@ -165,7 +165,7 @@ flowchart LR
     CART_S --> ORDER_S
     ORDER_S --> PAYMENT_S
 
-    %% ===================== ASYNC PRODUCERS · OUTBOX RELAY =====================
+    %% ===================== ASYNC PRODUCERS =====================
     PRODUCT_S -. "catalog" .-> KAFKA
     ORDER_S -. "orders" .-> KAFKA
     PAYMENT_S -. "payments" .-> KAFKA
