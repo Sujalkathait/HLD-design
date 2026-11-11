@@ -1,166 +1,304 @@
-# HLD-design
+# High Level Design · E-Commerce Platform
 
-High-Level Design for a scalable e-commerce platform built with microservices.
+Scalable microservices architecture for an e-commerce platform like Amazon or Flipkart.
 
 ---
 
-## E-Commerce Microservices Architecture
+## How It Works
 
-A user places an order on the website. The request travels through the edge layer, hits the API Gateway, reaches the right service, processes the order, takes payment, reserves inventory, ships the product, and sends notifications — all handled by independent services talking to each other through Apache Kafka.
+A customer opens the app, browses products, adds items to cart, places an order, makes payment, and receives the product. Behind the scenes, 10 independent services handle each part of this journey, talking to each other through Apache Kafka so no service blocks another.
 
-> **Solid arrows** = Synchronous (user is waiting for a response)
+> **Solid lines** = Synchronous — the user is waiting for a response
 >
-> **Dotted arrows** = Asynchronous (happens in the background through Kafka)
+> **Dotted lines** = Asynchronous — happens in the background via Kafka
 
-### Architecture Diagram
+---
+
+## Architecture Diagram
 
 ```mermaid
-flowchart TB
+flowchart LR
+
+    %% ===================== LEGEND =====================
+    subgraph LEGEND["Legend"]
+        direction TB
+        L1["Solid Line = Synchronous · User Waiting"]
+        L2["Dotted Line = Asynchronous · Via Kafka"]
+    end
 
     %% ===================== EDGE LAYER =====================
     subgraph EDGE["Edge Layer"]
+        direction TB
         CLIENT["Client<br/>Website · Mobile App · Admin Panel"]
-        CDN_NODE["Content Delivery Network<br/>Amazon CloudFront + S3 Storage"]
-        FIREWALL["Web Application Firewall"]
-        LOAD_BALANCER["Load Balancer<br/>2 Servers"]
-        CLIENT --> CDN_NODE --> FIREWALL --> LOAD_BALANCER
+        DNS["DNS"]
+        CDN["Content Delivery Network<br/>CloudFront"]
+        S3[("S3 Storage<br/>Images · Static Files")]
+        WAF["Web Application Firewall"]
+        LB["Load Balancer"]
+        CLIENT --> DNS --> CDN --> WAF --> LB
+        CDN --> S3
     end
 
-    GATEWAY["API Gateway · 2 Servers<br/>Token Validation · Rate Limiting · Request Routing"]
-    LOAD_BALANCER --> GATEWAY
+    GW["API Gateway<br/>JWT Validation<br/>Rate Limiting<br/>Request Routing"]
+    LB --> GW
 
-    %% ===================== SERVICES =====================
-    GATEWAY --> USER_SVC["User Service · 3 Servers<br/>PostgreSQL + Redis"]
-    GATEWAY --> PRODUCT_SVC["Product Service · 3 Servers<br/>MongoDB + Redis"]
-    GATEWAY --> SEARCH_SVC["Search Service · 2 Servers<br/>Elasticsearch + Redis"]
-    GATEWAY --> RECOMMENDATION_SVC["Recommendation Service · 2 Servers<br/>Cassandra + Redis"]
-    GATEWAY --> CART_SVC["Cart Service · 3 Servers<br/>MongoDB + Redis"]
-    GATEWAY --> ORDER_SVC["Order Service · 3 Servers<br/>PostgreSQL · Saga Pattern"]
-
-    %% ===================== ORDER FLOW =====================
-    CART_SVC -->|"checkout"| ORDER_SVC
-    ORDER_SVC -->|"initiate payment"| PAYMENT_SVC["Payment Service · 2 Servers<br/>PostgreSQL · Idempotency Keys"]
-    PAYMENT_SVC --> PAYMENT_PROVIDER["Payment Gateway<br/>Razorpay or Stripe"]
-
-    %% ===================== KAFKA MESSAGE QUEUE =====================
-    subgraph KAFKA_SECTION["Apache Kafka Message Queue · 3 Brokers"]
-        KAFKA[("Kafka Topics<br/>orders · payments · catalog<br/>inventory · shipments · notifications<br/>Each Topic Partitioned by Entity ID<br/>1 Consumer Group per Service")]
-        RETRY_QUEUE["Retry Queue<br/>Exponential Backoff<br/>Max 3 Retries"]
-        DEAD_LETTER_QUEUE[("Dead Letter Queue<br/>Failed Messages<br/>Stored for Manual Review")]
-        KAFKA -->|"message failed"| RETRY_QUEUE
-        RETRY_QUEUE -->|"retry"| KAFKA
-        RETRY_QUEUE -->|"all retries failed"| DEAD_LETTER_QUEUE
+    %% ===================== USER SERVICE =====================
+    subgraph USER_BLOCK["User Service"]
+        direction TB
+        USER_S["User Service"]
+        USER_REDIS[("Redis<br/>Session · Token")]
+        USER_PG[("PostgreSQL<br/>Primary")]
+        USER_PG_R[("PostgreSQL<br/>Replica")]
+        USER_S --> USER_REDIS
+        USER_S --> USER_PG
+        USER_PG -. replication .-> USER_PG_R
     end
 
-    %% ===================== PRODUCERS =====================
-    PRODUCT_SVC -.->|"catalog changes"| KAFKA
-    ORDER_SVC -.->|"new orders"| KAFKA
-    PAYMENT_SVC -.->|"payment status"| KAFKA
-    INVENTORY_SVC -.->|"stock updates"| KAFKA
-    SHIPPING_SVC -.->|"shipment tracking"| KAFKA
+    %% ===================== PRODUCT SERVICE =====================
+    subgraph PRODUCT_BLOCK["Product Service"]
+        direction TB
+        PRODUCT_S["Product Service"]
+        PRODUCT_REDIS[("Redis<br/>Catalog Cache")]
+        PRODUCT_MONGO[("MongoDB<br/>Primary")]
+        PRODUCT_MONGO_R[("MongoDB<br/>Replica")]
+        PRODUCT_S --> PRODUCT_REDIS
+        PRODUCT_S --> PRODUCT_MONGO
+        PRODUCT_MONGO -. replication .-> PRODUCT_MONGO_R
+    end
 
-    %% ===================== CONSUMERS =====================
-    KAFKA -.->|"catalog changes"| SEARCH_SVC
-    KAFKA -.->|"orders and catalog"| RECOMMENDATION_SVC
-    KAFKA -.->|"new orders"| INVENTORY_SVC["Inventory Service · 2 Servers<br/>PostgreSQL + Redis"]
-    KAFKA -.->|"payment confirmed"| SHIPPING_SVC["Shipping Service · 2 Servers<br/>PostgreSQL"]
-    KAFKA -.->|"payment and shipping updates"| ORDER_SVC
-    KAFKA -.->|"all events"| NOTIFICATION_SVC["Notification Service · 2 Servers<br/>Cassandra"]
+    %% ===================== SEARCH SERVICE =====================
+    subgraph SEARCH_BLOCK["Search Service"]
+        direction TB
+        SEARCH_S["Search Service"]
+        SEARCH_REDIS[("Redis<br/>Query Cache")]
+        SEARCH_ES[("Elasticsearch<br/>Primary")]
+        SEARCH_ES_R[("Elasticsearch<br/>Replica")]
+        SEARCH_S --> SEARCH_REDIS
+        SEARCH_S --> SEARCH_ES
+        SEARCH_ES -. replication .-> SEARCH_ES_R
+    end
 
-    %% ===================== EXTERNAL SERVICES =====================
-    SHIPPING_SVC --> COURIER["Courier Partner API<br/>Delhivery · Blue Dart"]
-    NOTIFICATION_SVC --> MESSAGING["Email and SMS Service<br/>SendGrid · Twilio"]
+    %% ===================== RECOMMENDATION SERVICE =====================
+    subgraph RECO_BLOCK["Recommendation Service"]
+        direction TB
+        RECO_S["Recommendation Service"]
+        RECO_REDIS[("Redis<br/>Top-N Cache")]
+        RECO_CASS[("Cassandra<br/>Node")]
+        RECO_CASS_R[("Cassandra<br/>Replica")]
+        RECO_S --> RECO_REDIS
+        RECO_S --> RECO_CASS
+        RECO_CASS -. replication .-> RECO_CASS_R
+    end
+
+    %% ===================== CART SERVICE =====================
+    subgraph CART_BLOCK["Cart Service"]
+        direction TB
+        CART_S["Cart Service"]
+        CART_REDIS[("Redis<br/>Active Carts")]
+        CART_MONGO[("MongoDB<br/>Primary")]
+        CART_MONGO_R[("MongoDB<br/>Replica")]
+        CART_S --> CART_REDIS
+        CART_S --> CART_MONGO
+        CART_MONGO -. replication .-> CART_MONGO_R
+    end
+
+    %% ===================== ORDER SERVICE =====================
+    subgraph ORDER_BLOCK["Order Service · Saga Orchestrator"]
+        direction TB
+        ORDER_S["Order Service"]
+        ORDER_PG[("PostgreSQL Primary<br/>Orders + Outbox Table")]
+        ORDER_PG_R[("PostgreSQL<br/>Replica")]
+        ORDER_S --> ORDER_PG
+        ORDER_PG -. replication .-> ORDER_PG_R
+    end
+
+    %% ===================== PAYMENT SERVICE =====================
+    subgraph PAYMENT_BLOCK["Payment Service"]
+        direction TB
+        PAYMENT_S["Payment Service<br/>Idempotency Keys"]
+        PAYMENT_PG[("PostgreSQL Primary<br/>Payments + Outbox Table")]
+        PAYMENT_PG_R[("PostgreSQL<br/>Replica")]
+        PAYMENT_S --> PAYMENT_PG
+        PAYMENT_PG -. replication .-> PAYMENT_PG_R
+    end
+
+    PAYMENT_PROVIDER["Payment Provider<br/>Razorpay · Stripe<br/>External"]
+    PAYMENT_S --> PAYMENT_PROVIDER
+
+    %% ===================== KAFKA EVENT BACKBONE =====================
+    subgraph KAFKA_BLOCK["Apache Kafka · Event Backbone"]
+        direction TB
+        KAFKA[("Kafka · Replicated x 3<br/>Topics: orders · payments · catalog<br/>inventory · shipments · notifications<br/>Consumer Group Per Service<br/>Partition By Entity ID")]
+        RETRY["Retry Queue<br/>Exponential Backoff"]
+        DLQ[("Dead Letter Queue<br/>Failed Messages")]
+        KAFKA -. "message failed" .-> RETRY
+        RETRY -. "retry" .-> KAFKA
+        RETRY -. "all retries exhausted" .-> DLQ
+    end
+
+    %% ===================== INVENTORY SERVICE =====================
+    subgraph INVENTORY_BLOCK["Inventory Service"]
+        direction TB
+        INVENTORY_S["Inventory Service"]
+        INVENTORY_REDIS[("Redis<br/>Stock Cache")]
+        INVENTORY_PG[("PostgreSQL<br/>Primary")]
+        INVENTORY_PG_R[("PostgreSQL<br/>Replica")]
+        INVENTORY_S --> INVENTORY_REDIS
+        INVENTORY_S --> INVENTORY_PG
+        INVENTORY_PG -. replication .-> INVENTORY_PG_R
+    end
+
+    %% ===================== SHIPPING SERVICE =====================
+    subgraph SHIPPING_BLOCK["Shipping Service"]
+        direction TB
+        SHIPPING_S["Shipping Service"]
+        SHIPPING_PG[("PostgreSQL<br/>Primary")]
+        SHIPPING_PG_R[("PostgreSQL<br/>Replica")]
+        SHIPPING_S --> SHIPPING_PG
+        SHIPPING_PG -. replication .-> SHIPPING_PG_R
+    end
+
+    COURIER["Courier · Logistics API<br/>External"]
+    SHIPPING_S --> COURIER
+
+    %% ===================== NOTIFICATION SERVICE =====================
+    subgraph NOTIFICATION_BLOCK["Notification Service"]
+        direction TB
+        NOTIFICATION_S["Notification Service"]
+        NOTIFICATION_CASS[("Cassandra<br/>Primary")]
+        NOTIFICATION_CASS_R[("Cassandra<br/>Replica")]
+        NOTIFICATION_S --> NOTIFICATION_CASS
+        NOTIFICATION_CASS -. replication .-> NOTIFICATION_CASS_R
+    end
+
+    EMAIL_SMS["Email · SMS<br/>External"]
+    NOTIFICATION_S --> EMAIL_SMS
+
+    %% ===================== SYNCHRONOUS FLOWS =====================
+    GW --> USER_S
+    GW --> PRODUCT_S
+    GW --> SEARCH_S
+    GW --> RECO_S
+    GW --> CART_S
+    GW --> ORDER_S
+    CART_S --> ORDER_S
+    ORDER_S --> PAYMENT_S
+
+    %% ===================== ASYNC PRODUCERS · OUTBOX RELAY =====================
+    PRODUCT_S -. "catalog" .-> KAFKA
+    ORDER_S -. "orders" .-> KAFKA
+    PAYMENT_S -. "payments" .-> KAFKA
+    INVENTORY_S -. "inventory" .-> KAFKA
+    SHIPPING_S -. "shipments" .-> KAFKA
+
+    %% ===================== ASYNC CONSUMERS =====================
+    KAFKA -. "catalog" .-> SEARCH_S
+    KAFKA -. "orders · catalog" .-> RECO_S
+    KAFKA -. "orders" .-> INVENTORY_S
+    KAFKA -. "payments" .-> SHIPPING_S
+    KAFKA -. "payments · shipments" .-> ORDER_S
+    KAFKA -. "orders · payments · shipments" .-> NOTIFICATION_S
 
     %% ===================== STYLES =====================
-    classDef service fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff,stroke-width:2px
-    classDef external fill:#422006,stroke:#fb923c,color:#ffedd5,stroke-dasharray:5 5
-    classDef kafkaStyle fill:#4c0519,stroke:#fb7185,color:#ffe4e6,stroke-width:3px
-    classDef dlq fill:#7f1d1d,stroke:#f87171,color:#fee2e2,stroke-width:2px
-    classDef edgeStyle fill:#27272a,stroke:#a1a1aa,color:#f4f4f5
-    classDef gatewayStyle fill:#312e81,stroke:#a5b4fc,color:#eef2ff,stroke-width:3px
+    classDef svc fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff,stroke-width:2px
+    classDef pg fill:#1e3a8a,stroke:#60a5fa,color:#dbeafe
+    classDef mongo fill:#14532d,stroke:#4ade80,color:#dcfce7
+    classDef redis fill:#7f1d1d,stroke:#f87171,color:#fee2e2
+    classDef cass fill:#164e63,stroke:#22d3ee,color:#cffafe
+    classDef elastic fill:#365314,stroke:#a3e635,color:#ecfccb
+    classDef ext fill:#422006,stroke:#fb923c,color:#ffedd5,stroke-dasharray:5 5
+    classDef kafkaNode fill:#4c0519,stroke:#fb7185,color:#ffe4e6,stroke-width:3px
+    classDef dlqNode fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
+    classDef edgeNode fill:#27272a,stroke:#a1a1aa,color:#f4f4f5
+    classDef gwNode fill:#312e81,stroke:#a5b4fc,color:#eef2ff,stroke-width:3px
 
-    class USER_SVC,PRODUCT_SVC,SEARCH_SVC,RECOMMENDATION_SVC,CART_SVC,ORDER_SVC,PAYMENT_SVC,INVENTORY_SVC,SHIPPING_SVC,NOTIFICATION_SVC service
-    class PAYMENT_PROVIDER,COURIER,MESSAGING external
-    class KAFKA kafkaStyle
-    class DEAD_LETTER_QUEUE,RETRY_QUEUE dlq
-    class CLIENT,CDN_NODE,FIREWALL,LOAD_BALANCER edgeStyle
-    class GATEWAY gatewayStyle
+    class USER_S,PRODUCT_S,SEARCH_S,RECO_S,CART_S,ORDER_S,PAYMENT_S,INVENTORY_S,SHIPPING_S,NOTIFICATION_S svc
+    class USER_PG,USER_PG_R,ORDER_PG,ORDER_PG_R,PAYMENT_PG,PAYMENT_PG_R,INVENTORY_PG,INVENTORY_PG_R,SHIPPING_PG,SHIPPING_PG_R pg
+    class PRODUCT_MONGO,PRODUCT_MONGO_R,CART_MONGO,CART_MONGO_R mongo
+    class USER_REDIS,PRODUCT_REDIS,SEARCH_REDIS,RECO_REDIS,CART_REDIS,INVENTORY_REDIS redis
+    class RECO_CASS,RECO_CASS_R,NOTIFICATION_CASS,NOTIFICATION_CASS_R cass
+    class SEARCH_ES,SEARCH_ES_R elastic
+    class PAYMENT_PROVIDER,COURIER,EMAIL_SMS ext
+    class KAFKA kafkaNode
+    class DLQ,RETRY dlqNode
+    class CLIENT,DNS,CDN,S3,WAF,LB edgeNode
+    class GW gwNode
 ```
 
 ---
 
-### What Each Service Does
+## What Each Service Does
 
-| Service | What It Does | Servers | Database | Why This Database |
-| --- | --- | --- | --- | --- |
-| **User Service** | Sign up, log in, manage profiles, store sessions | 3 | PostgreSQL + Redis | PostgreSQL for reliable user data, Redis for fast session lookups |
-| **Product Service** | Store and manage product catalog (name, price, images, variants) | 3 | MongoDB + Redis | MongoDB handles flexible product schemas (different categories have different fields), Redis caches hot products |
-| **Search Service** | Full-text search across products, filters, autocomplete | 2 | Elasticsearch + Redis | Elasticsearch is built for fast text search, Redis caches frequent queries |
-| **Recommendation Service** | "You might also like" suggestions based on browsing and purchase history | 2 | Cassandra + Redis | Cassandra handles massive writes (every click is tracked), Redis caches top recommendations |
-| **Cart Service** | Add to cart, update quantities, save cart across devices | 3 | MongoDB + Redis | MongoDB for flexible cart structure, Redis for active cart quick access |
-| **Order Service** | Create orders, track status, coordinate the entire order flow using the Saga Pattern | 3 | PostgreSQL | PostgreSQL for strong ACID transactions — orders must never be inconsistent |
-| **Payment Service** | Process payments, handle refunds, prevent duplicate charges with idempotency keys | 2 | PostgreSQL | PostgreSQL for reliable payment records — money transactions need strong consistency |
-| **Inventory Service** | Track stock levels, reserve stock when order is placed, release stock on cancellation | 2 | PostgreSQL + Redis | PostgreSQL for accurate counts, Redis for real-time stock display |
-| **Shipping Service** | Create shipments, generate tracking numbers, update delivery status | 2 | PostgreSQL | PostgreSQL for reliable shipment records |
-| **Notification Service** | Send order confirmations, payment receipts, shipping updates via email and SMS | 2 | Cassandra | Cassandra handles high-volume write-heavy notification logs |
-
-**Total: 24 service servers + 2 API Gateway servers + 2 Load Balancers = 28 servers minimum**
+| Service | What It Does | Database | Why This Database |
+| --- | --- | --- | --- |
+| **User Service** | Sign up, login, manage profiles, sessions | PostgreSQL + Redis | Reliable user data + fast session lookups |
+| **Product Service** | Product catalog — names, prices, images, variants | MongoDB + Redis | Flexible schemas for different product categories + hot product cache |
+| **Search Service** | Full-text product search, filters, autocomplete | Elasticsearch + Redis | Built for fast text search + frequent query cache |
+| **Recommendation Service** | "You might also like" based on browsing and purchases | Cassandra + Redis | Handles massive click-tracking writes + top-N cache |
+| **Cart Service** | Add to cart, update quantities, persist across devices | MongoDB + Redis | Flexible cart structure + active cart quick access |
+| **Order Service** | Create orders, track status, orchestrate entire flow via Saga Pattern | PostgreSQL | Strong ACID — orders must never be inconsistent |
+| **Payment Service** | Process payments, refunds, prevents duplicate charges via idempotency keys | PostgreSQL | Money transactions need strong consistency |
+| **Inventory Service** | Track stock, reserve on order, release on cancellation | PostgreSQL + Redis | Accurate counts + real-time stock display |
+| **Shipping Service** | Create shipments, generate tracking, update delivery status | PostgreSQL | Reliable shipment records |
+| **Notification Service** | Order confirmations, receipts, shipping updates via email and SMS | Cassandra | High-volume write-heavy notification logs |
 
 ---
 
-### How Apache Kafka Works Here
+## How Kafka Connects Everything
 
-Kafka is the message queue that lets services talk to each other **without waiting**. When the Order Service creates a new order, it doesn't call the Inventory Service directly. Instead, it puts a message on the Kafka `orders` topic, and the Inventory Service picks it up whenever it's ready.
+When the Order Service creates a new order, it doesn't call the Inventory Service directly. Instead it puts a message on the `orders` topic. The Inventory Service picks it up when it's ready. No service blocks another.
 
-**Why 3 Brokers?** Each message is copied to all 3 Kafka broker servers. If one server dies, the other two still have the data. This is called a replication factor of 3.
-
-**Kafka Topics and Who Uses Them:**
-
-| Topic | Who Produces (Sends) | Who Consumes (Receives) |
+| Topic | Who Sends | Who Receives |
 | --- | --- | --- |
-| `orders` | Order Service | Inventory Service, Recommendation Service, Notification Service |
-| `payments` | Payment Service | Shipping Service, Order Service, Notification Service |
-| `catalog` | Product Service | Search Service, Recommendation Service |
-| `inventory` | Inventory Service | *(available for future consumers)* |
-| `shipments` | Shipping Service | Order Service, Notification Service |
+| `orders` | Order Service | Inventory, Recommendation, Notification |
+| `payments` | Payment Service | Shipping, Order, Notification |
+| `catalog` | Product Service | Search, Recommendation |
+| `inventory` | Inventory Service | *(future consumers)* |
+| `shipments` | Shipping Service | Order, Notification |
+
+**3 Kafka Brokers** — every message is copied to all 3 servers. If one dies, the other two still have the data.
 
 ---
 
-### How the Dead Letter Queue Works
+## Dead Letter Queue
 
-When a message fails to process, it doesn't just disappear:
+When a message fails, it doesn't disappear:
 
-1. **First attempt fails** → Message goes to the Retry Queue
-2. **Retry Queue** waits (1 second, then 5 seconds, then 30 seconds — exponential backoff) and sends it back to Kafka
-3. **After 3 failed retries** → Message moves to the Dead Letter Queue
-4. **Dead Letter Queue** stores the failed message permanently so engineers can review it, fix the bug, and replay the message manually
+1. **First attempt fails** → goes to the Retry Queue
+2. **Retry Queue** waits (1s → 5s → 30s, exponential backoff) and sends it back
+3. **After 3 retries fail** → moves to Dead Letter Queue
+4. **Dead Letter Queue** stores it permanently — engineers review, fix the bug, replay manually
 
-This ensures **no message is ever lost**, even when things go wrong.
-
----
-
-### How the Saga Pattern Works (Order Service)
-
-Placing an order involves multiple services (payment, inventory, shipping). If any step fails, we need to undo everything. The Order Service acts as the orchestrator:
-
-1. **Create Order** → Order Service writes order to its database
-2. **Reserve Inventory** → Kafka message to Inventory Service → stock reserved
-3. **Process Payment** → Sync call to Payment Service → payment charged
-4. **If payment fails** → Kafka message to Inventory Service → stock released (compensation)
-5. **If payment succeeds** → Kafka message to Shipping Service → shipment created
-6. **If shipping fails** → refund payment + release stock (compensation)
-
-This is called the **Saga Pattern** — each step has a compensating action to undo it if something fails later.
+**No message is ever lost.**
 
 ---
 
-### External Services
+## Saga Pattern — How an Order Is Placed
 
-| Service | Provider | Purpose |
+The Order Service orchestrates multi-service transactions:
+
+| Step | Action | If It Fails |
 | --- | --- | --- |
-| Payment Gateway | Razorpay or Stripe | Process credit card, UPI, net banking payments |
-| Courier Partner | Delhivery, Blue Dart | Pick up, ship, and deliver packages |
-| Email Service | SendGrid | Send order confirmation and receipt emails |
-| SMS Service | Twilio | Send order and shipping status via text message |
-| Content Delivery Network | Amazon CloudFront | Serve product images and static files fast from edge locations closest to the user |
-| Object Storage | Amazon S3 | Store product images, invoices, and other files |
+| 1 | Create order in database | — |
+| 2 | Reserve inventory (via Kafka) | Cancel order |
+| 3 | Process payment (sync call) | Release inventory |
+| 4 | Create shipment (via Kafka) | Refund payment + release inventory |
+| 5 | Send notification (via Kafka) | Log failure, retry later |
+
+Each step has a **compensating action** — if step 3 fails, step 2 is undone automatically.
+
+---
+
+## Color Legend for Diagram
+
+| Color | Meaning |
+| --- | --- |
+| 🟣 Purple | Microservices |
+| 🔵 Blue | PostgreSQL databases |
+| 🟢 Green | MongoDB databases |
+| 🔴 Red | Redis caches |
+| 🩵 Cyan | Cassandra databases |
+| 🟡 Yellow-Green | Elasticsearch |
+| 🟠 Orange (dashed) | External services |
+| 🩷 Pink | Apache Kafka |
+| ⬜ Gray | Edge layer (Client, DNS, CDN, WAF, Load Balancer) |
