@@ -1,72 +1,70 @@
 flowchart TB
 
-    %% ===================== EDGE =====================
-    subgraph EDGE["Edge & Security"]
-        CLIENT["Client<br/>Web · Mobile · Admin"]
-        CDN["CDN CloudFront + S3"]
-        WAF["WAF"]
-        LB["Load Balancer"]
-        CLIENT --> CDN --> WAF --> LB
+    %% ===================== EDGE LAYER =====================
+    subgraph EDGE["Edge Layer"]
+        CLIENT["Client<br/>Website · Mobile App · Admin Panel"]
+        CDN_NODE["Content Delivery Network<br/>Amazon CloudFront + S3 Storage"]
+        FIREWALL["Web Application Firewall"]
+        LOAD_BALANCER["Load Balancer<br/>2 Servers"]
+        CLIENT --> CDN_NODE --> FIREWALL --> LOAD_BALANCER
     end
 
-    GW["API Gateway<br/>JWT · Rate Limit · Routing"]
-    LB --> GW
+    GATEWAY["API Gateway · 2 Servers<br/>Token Validation · Rate Limiting · Request Routing"]
+    LOAD_BALANCER --> GATEWAY
 
-    %% ===================== SYNC SERVICES =====================
-    GW --> US["User Service<br/>PostgreSQL · Redis"]
-    GW --> PS["Product Service<br/>MongoDB · Redis"]
-    GW --> SS["Search Service<br/>Elasticsearch · Redis"]
-    GW --> RS["Recommendation Service<br/>Cassandra · Redis"]
-    GW --> CS["Cart Service<br/>MongoDB · Redis"]
-    GW --> OS["Order Service<br/>PostgreSQL · Saga Orchestrator"]
+    %% ===================== SERVICES =====================
+    GATEWAY --> USER_SVC["User Service · 3 Servers<br/>PostgreSQL + Redis"]
+    GATEWAY --> PRODUCT_SVC["Product Service · 3 Servers<br/>MongoDB + Redis"]
+    GATEWAY --> SEARCH_SVC["Search Service · 2 Servers<br/>Elasticsearch + Redis"]
+    GATEWAY --> RECOMMENDATION_SVC["Recommendation Service · 2 Servers<br/>Cassandra + Redis"]
+    GATEWAY --> CART_SVC["Cart Service · 3 Servers<br/>MongoDB + Redis"]
+    GATEWAY --> ORDER_SVC["Order Service · 3 Servers<br/>PostgreSQL · Saga Pattern"]
 
     %% ===================== ORDER FLOW =====================
-    CS -->|"checkout"| OS
-    OS -->|"pay"| PAY["Payment Service<br/>PostgreSQL"]
-    PAY --> STRIPE["Razorpay / Stripe"]
+    CART_SVC -->|"checkout"| ORDER_SVC
+    ORDER_SVC -->|"initiate payment"| PAYMENT_SVC["Payment Service · 2 Servers<br/>PostgreSQL · Idempotency Keys"]
+    PAYMENT_SVC --> PAYMENT_PROVIDER["Payment Gateway<br/>Razorpay or Stripe"]
 
-    %% ===================== KAFKA =====================
-    KAFKA[("Kafka Cluster x3<br/>orders · payments · catalog<br/>inventory · shipments<br/>DLQ + Retry")]
-
-    %% Producers
-    PS -.->|"catalog"| KAFKA
-    OS -.->|"orders"| KAFKA
-    PAY -.->|"payments"| KAFKA
-    INV -.->|"inventory"| KAFKA
-    SHIP -.->|"shipments"| KAFKA
-
-    %% Consumers
-    KAFKA -.->|"catalog"| SS
-    KAFKA -.->|"orders, catalog"| RS
-    KAFKA -.->|"orders"| INV["Inventory Service<br/>PostgreSQL · Redis"]
-    KAFKA -.->|"payments"| SHIP["Shipping Service<br/>PostgreSQL"]
-    KAFKA -.->|"payments, shipments"| OS
-    KAFKA -.->|"all events"| NOTIF["Notification Service<br/>Cassandra"]
-
-    %% ===================== EXTERNAL =====================
-    SHIP --> COURIER["Courier / Logistics API"]
-    NOTIF --> EMAIL["Email / SMS Gateway"]
-
-    %% ===================== OBSERVABILITY =====================
-    subgraph OBS["Observability · OpenTelemetry"]
-        LOG["Logging · ELK"]
-        MET["Metrics · Prometheus + Grafana"]
-        TRC["Tracing · Jaeger"]
-        ALERT["Alerting · PagerDuty"]
-        MET --> ALERT
+    %% ===================== KAFKA MESSAGE QUEUE =====================
+    subgraph KAFKA_SECTION["Apache Kafka Message Queue · 3 Brokers"]
+        KAFKA[("Kafka Topics<br/>orders · payments · catalog<br/>inventory · shipments · notifications<br/>Each Topic Partitioned by Entity ID<br/>1 Consumer Group per Service")]
+        RETRY_QUEUE["Retry Queue<br/>Exponential Backoff<br/>Max 3 Retries"]
+        DEAD_LETTER_QUEUE[("Dead Letter Queue<br/>Failed Messages<br/>Stored for Manual Review")]
+        KAFKA -->|"message failed"| RETRY_QUEUE
+        RETRY_QUEUE -->|"retry"| KAFKA
+        RETRY_QUEUE -->|"all retries failed"| DEAD_LETTER_QUEUE
     end
 
-    %% ===================== STYLES =====================
-    classDef svc fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff,stroke-width:2px
-    classDef ext fill:#422006,stroke:#fb923c,color:#ffedd5,stroke-dasharray:5 5
-    classDef kafka fill:#4c0519,stroke:#fb7185,color:#ffe4e6,stroke-width:3px
-    classDef edge fill:#27272a,stroke:#a1a1aa,color:#f4f4f5
-    classDef gw fill:#312e81,stroke:#a5b4fc,color:#eef2ff,stroke-width:3px
-    classDef obs fill:#164e63,stroke:#22d3ee,color:#cffafe
+    %% ===================== PRODUCERS =====================
+    PRODUCT_SVC -.->|"catalog changes"| KAFKA
+    ORDER_SVC -.->|"new orders"| KAFKA
+    PAYMENT_SVC -.->|"payment status"| KAFKA
+    INVENTORY_SVC -.->|"stock updates"| KAFKA
+    SHIPPING_SVC -.->|"shipment tracking"| KAFKA
 
-    class US,PS,SS,RS,CS,OS,PAY,INV,SHIP,NOTIF svc
-    class STRIPE,COURIER,EMAIL ext
-    class KAFKA kafka
-    class CLIENT,CDN,WAF,LB edge
-    class GW gw
-    class LOG,MET,TRC,ALERT obs
+    %% ===================== CONSUMERS =====================
+    KAFKA -.->|"catalog changes"| SEARCH_SVC
+    KAFKA -.->|"orders and catalog"| RECOMMENDATION_SVC
+    KAFKA -.->|"new orders"| INVENTORY_SVC["Inventory Service · 2 Servers<br/>PostgreSQL + Redis"]
+    KAFKA -.->|"payment confirmed"| SHIPPING_SVC["Shipping Service · 2 Servers<br/>PostgreSQL"]
+    KAFKA -.->|"payment and shipping updates"| ORDER_SVC
+    KAFKA -.->|"all events"| NOTIFICATION_SVC["Notification Service · 2 Servers<br/>Cassandra"]
+
+    %% ===================== EXTERNAL SERVICES =====================
+    SHIPPING_SVC --> COURIER["Courier Partner API<br/>Delhivery · Blue Dart"]
+    NOTIFICATION_SVC --> MESSAGING["Email and SMS Service<br/>SendGrid · Twilio"]
+
+    %% ===================== STYLES =====================
+    classDef service fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff,stroke-width:2px
+    classDef external fill:#422006,stroke:#fb923c,color:#ffedd5,stroke-dasharray:5 5
+    classDef kafkaStyle fill:#4c0519,stroke:#fb7185,color:#ffe4e6,stroke-width:3px
+    classDef dlq fill:#7f1d1d,stroke:#f87171,color:#fee2e2,stroke-width:2px
+    classDef edgeStyle fill:#27272a,stroke:#a1a1aa,color:#f4f4f5
+    classDef gatewayStyle fill:#312e81,stroke:#a5b4fc,color:#eef2ff,stroke-width:3px
+
+    class USER_SVC,PRODUCT_SVC,SEARCH_SVC,RECOMMENDATION_SVC,CART_SVC,ORDER_SVC,PAYMENT_SVC,INVENTORY_SVC,SHIPPING_SVC,NOTIFICATION_SVC service
+    class PAYMENT_PROVIDER,COURIER,MESSAGING external
+    class KAFKA kafkaStyle
+    class DEAD_LETTER_QUEUE,RETRY_QUEUE dlq
+    class CLIENT,CDN_NODE,FIREWALL,LOAD_BALANCER edgeStyle
+    class GATEWAY gatewayStyle
